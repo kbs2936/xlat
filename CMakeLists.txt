@@ -10,7 +10,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(LINKER_SCRIPT "STM32F746NGHx_FLASH.ld")
 
 # define CPU OPTIONS
-set(CPU_OPTIONS -mthumb -march=armv7e-m -mfloat-abi=hard -mfpu=fpv5-sp-d16 -mcpu=cortex-m7)
+#set(CPU_OPTIONS -mthumb -march=armv7e-m -mfloat-abi=hard -mfpu=fpv5-sp-d16 -mcpu=cortex-m7)
+set(CPU_OPTIONS -mthumb -mfloat-abi=hard -mfpu=fpv5-sp-d16 -mcpu=cortex-m7)
 
 # optimizations (-O0 -O1 -O2 -O3 -Os -Ofast -Og -flto)
 set(CMAKE_C_FLAGS_DEBUG "-Og -g3 -ggdb -DDEBUG")
