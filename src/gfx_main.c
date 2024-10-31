@@ -28,7 +28,7 @@
 #define Y_CHART_SIZE_X 410
 #define Y_CHART_SIZE_Y 130
 
-#define Y_CHART_RANGE 2000
+#define Y_CHART_RANGE 6000  //Y轴最大时间改6000us=6ms，原来2000
 
 #define X_CHART_TICKS_MAJOR 11
 #define X_CHART_TICKS_MINOR 1
@@ -69,7 +69,8 @@ static void latency_label_update(void)
 
 void gfx_set_device_label(const char * manufacturer, const char * productname, const char *vidpid)
 {
-    lv_label_set_text(vidpid_label, vidpid);
+    //lv_label_set_text(vidpid_label, vidpid); 
+    lv_label_set_text(vidpid_label, "");//先不显示VID PID
     lv_label_set_text(manufacturer_label, manufacturer);
     lv_label_set_text(productname_label, productname);
 
@@ -314,14 +315,15 @@ void gfx_set_byte_offsets_text(void)
         sprintf(text, "Data: offsets not found");
     }
 
-    lv_checkbox_set_text(hid_offsets_label, text);
+    //lv_checkbox_set_text(hid_offsets_label, text); 
+    lv_checkbox_set_text(hid_offsets_label, "");//不显示右上角第3行鼠标的 Data 部分
     lv_obj_align_to(hid_offsets_label, productname_label, LV_ALIGN_OUT_BOTTOM_RIGHT, 0, 5);
 }
 
 static void gfx_xlat_gui(void)
 {
-    // Rotate display
-    lv_disp_set_rotation(lv_disp_get_default(), LV_DISP_ROT_180);
+    // Rotate display 先不旋转，方便调试
+    //lv_disp_set_rotation(lv_disp_get_default(), LV_DISP_ROT_180);
 
     // Load theme
     new_theme_init_and_set();

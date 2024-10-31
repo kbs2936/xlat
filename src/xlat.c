@@ -56,7 +56,7 @@ static bool         auto_trigger_level_high = false;
 //                  \__/  \__/  \__/  \__/
 //
 // Therefore, take a large enough time window to debounce the GPIO interrupt.
-#define GPIO_IRQ_HOLDOFF_US (50 * 1000)  // 20ms;
+#define GPIO_IRQ_HOLDOFF_US (50 * 1000)  // 20ms; lh: not 50ms ?
 static uint32_t gpio_irq_holdoff_us = GPIO_IRQ_HOLDOFF_US;
 static TimerHandle_t xlat_timer_handle;
 
@@ -433,13 +433,14 @@ void xlat_usb_hid_event(void)
         }
     }
 
-#if 0
+#if 1
     if (USBH_HID_GetDeviceType(phost) == HID_KEYBOARD) {  // if the HID is Keyboard
-        uint8_t key;
-        HID_KEYBD_Info_TypeDef *Keyboard_Info;
-        Keyboard_Info = USBH_HID_GetKeybdInfo(phost);  // get the info
-        key = USBH_HID_GetASCIICode(Keyboard_Info);  // get the key pressed
-        printf("Key Pressed = %c\n", key);
+        // uint8_t key;
+        // HID_KEYBD_Info_TypeDef *Keyboard_Info;
+        // Keyboard_Info = USBH_HID_GetKeybdInfo(phost);  // get the info
+        // key = USBH_HID_GetASCIICode(Keyboard_Info);  // get the key pressed
+        // printf("Key Pressed = %c\n", key);
+        printf("Key Pressed\n");
     }
 #endif
 
