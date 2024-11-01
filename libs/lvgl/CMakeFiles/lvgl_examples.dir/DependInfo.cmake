@@ -170,7 +170,6 @@ set(CMAKE_C_COMPILER_ID "GNU")
 # Preprocessor definitions for this target.
 set(CMAKE_TARGET_DEFINITIONS_C
   "ARCH=ARCH_CUSTOM"
-  "DEBUG"
   "LV_CONF_INCLUDE_SIMPLE"
   "LV_LVGL_H_INCLUDE_SIMPLE"
   "STM32"

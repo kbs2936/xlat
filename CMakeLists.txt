@@ -150,7 +150,6 @@ add_definitions(
         -DSTM32F7
         -DSTM32F746xx
         -DSTM32F746G_DISCO
-        -DDEBUG
         -DUSE_HAL_DRIVER
         -DUSB_CAN_BE_HOST
         -DARCH=ARCH_CUSTOM

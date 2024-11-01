@@ -373,4 +373,11 @@ extern osMessageQId  msgQUsbClick;
 extern osMessageQId  msgQGfxTask;
 extern SemaphoreHandle_t lvgl_mutex;
 
+
+#define LOG_DEBUG 1
+
+#if (LOG_DEBUG == 0) 
+#define printf(...)
+#endif
+
 #endif /* __MAIN_H */
