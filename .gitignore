@@ -54,3 +54,11 @@ dkms.conf
 build/
 .idea/
 .gdb_history
+
+.vscode/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Makefile
+xlat.bin
