@@ -25,8 +25,13 @@
 #define AUTO_TRIGGER_PRESSED_PERIOD_MS (30)
 #define REPORT_LEN 64
 
+/* Pseudo interface protocol: event carries a late GPIO edge (GPIO edge seen AFTER the
+ * matching USB report), not a HID report. timestamp = USB report, gpio_timestamp = GPIO edge. */
+#define XLAT_EVENT_GPIO_LATE 0xFF
+
 typedef struct hid_event {
     uint32_t timestamp;
+    uint32_t gpio_timestamp;
     uint8_t report[64];
     size_t report_size;
     uint8_t itf_protocol;
@@ -53,14 +58,14 @@ void xlat_task(void const * argument);
 void xlat_process_usb_hid_event(void);
 void xlat_usb_event_callback(uint32_t timestamp, uint8_t const *report, size_t report_size, uint8_t itf_protocol); // called from USB Host library
 
-uint32_t xlat_last_latency_us_get(enum latency_type type);
-uint32_t xlat_latency_average_get(enum latency_type type);
+int32_t xlat_last_latency_us_get(enum latency_type type);
+int32_t xlat_latency_average_get(enum latency_type type);
 uint32_t xlat_latency_count_get(enum latency_type type);
 uint32_t xlat_latency_variance_get(enum latency_type type);
 uint32_t xlat_latency_standard_deviation_get(enum latency_type type);
 
 void xlat_latency_reset(void);
-void xlat_latency_measurement_add(uint32_t latency_us, enum latency_type type);
+void xlat_latency_measurement_add(int32_t latency_us, enum latency_type type);
 void xlat_print_measurement(void);
 
 void xlat_gpio_irq_holdoff_us_set(uint32_t us);

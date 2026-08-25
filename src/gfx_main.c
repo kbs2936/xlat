@@ -55,6 +55,7 @@ static lv_obj_t * trigger_ready_cb;
 
 static size_t chart_point_count = 0;
 static lv_coord_t chart_y_range = 0;
+static lv_coord_t chart_y_min = 0;   // <= 0, extended when negative latencies are measured
 
 static lv_timer_t * trigger_timer = NULL;
 static lv_timer_t * trigger_timer_turn_off = NULL;
@@ -222,33 +223,41 @@ static void chart_reset(void)
 
     chart_point_count = 0;
     chart_y_range = Y_CHART_RANGE;
-    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, chart_y_range);
+    chart_y_min = 0;
+    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, chart_y_min, chart_y_range);
 
     lv_chart_refresh(chart);
 }
 
-static void chart_update(uint32_t value)
+static void chart_update(int32_t value)
 {
     chart_point_count++;
 
-    // clip to the nearest rounded down 1000
+    // clip to the nearest rounded down 1000 (both signs), so the range rounding below can't overflow
 #if LV_USE_LARGE_COORD
-    value = value > (INT32_MAX / 1000 * 1000) ? (INT32_MAX / 1000 * 1000) : value;
+    const int32_t limit = INT32_MAX / 1000 * 1000;
 #else
-    value = value > (INT16_MAX / 1000 * 1000) ? (INT16_MAX / 1000 * 1000) : value;
+    const int32_t limit = INT16_MAX / 1000 * 1000;
 #endif
+    value = value > limit ? limit : value;
+    value = value < -limit ? -limit : value;
 
     lv_chart_set_next_value(chart, lv_chart_get_series_next(chart, NULL), (lv_coord_t)value);
 
-    // can't overflow because we clipped down to the nearest 1000 within signed while value is unsigned
-    value = (value + 999) / 1000 * 1000; // round up to nearest 1000
-
-    // update y-axis range if needed
-    if (value > chart_y_range) {
-        chart_y_range = (lv_coord_t)value;
+    // update y-axis range if needed: round away from zero to the nearest 1000
+    if (value >= 0) {
+        int32_t top = (value + 999) / 1000 * 1000;
+        if (top > chart_y_range) {
+            chart_y_range = (lv_coord_t)top;
+        }
+    } else {
+        int32_t bottom = -((-value + 999) / 1000 * 1000);
+        if (bottom < chart_y_min) {
+            chart_y_min = (lv_coord_t)bottom;
+        }
     }
 
-    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, chart_y_range);
+    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, chart_y_min, chart_y_range);
 
     // refresh the chart
     lv_chart_refresh(chart);
@@ -265,7 +274,8 @@ void lv_chart_new(lv_coord_t yrange)
     chart = lv_chart_create(lv_scr_act());
     lv_obj_set_size(chart, Y_CHART_SIZE_X, Y_CHART_SIZE_Y);
     lv_obj_align(chart, LV_ALIGN_CENTER, 20, 10);
-    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, yrange);
+    chart_y_min = 0;
+    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, chart_y_min, yrange);
 
     // Do not display points on the data
     lv_obj_set_style_size(chart, 0, LV_PART_INDICATOR);

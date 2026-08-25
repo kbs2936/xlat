@@ -42,13 +42,20 @@ volatile uint32_t usb_hid_rx_timestamp; // set in OTG_HS_IRQHandler
 
 static uint32_t last_btn_gpio_timestamp = 0;
 static uint32_t last_usb_timestamp_us = 0;
-static uint32_t last_latency_us[LATENCY_TYPE_MAX];
-static uint64_t average_latency_us_sum[LATENCY_TYPE_MAX]; // sum of all measurements
+static int32_t  last_latency_us[LATENCY_TYPE_MAX];
+static int64_t  average_latency_us_sum[LATENCY_TYPE_MAX]; // sum of all measurements
 static uint64_t average_latency_us_sum_sq[LATENCY_TYPE_MAX]; // sum of squares, for variance
 static uint32_t average_latency_us_count[LATENCY_TYPE_MAX];
 
 static volatile uint_fast8_t gpio_irq_producer = 0;
 static volatile uint_fast8_t gpio_irq_consumer = 0;
+
+// A USB click/key/motion report that arrived without a preceding GPIO edge.
+// The GPIO edge may still follow (e.g. analog/TMR switches where XLAT's input
+// threshold is crossed after the mouse already reported the click): that is a
+// negative latency. Written by the xlat task, consumed by the EXTI ISR.
+static volatile bool     usb_event_pending = false;
+static volatile uint32_t usb_event_pending_timestamp = 0;
 
 // SETTINGS
 volatile bool       xlat_initialized = false;
@@ -210,37 +217,76 @@ bool CALLBACK_HIDParser_FilterHIDReportItem(HID_ReportItem_t* const CurrentItem)
 }
 
 
-static int calculate_gpio_to_usb_time(void)
+// Record one gpio -> usb measurement (may be negative) and push it to the GUI
+static void gpio_to_usb_measurement_report(int32_t us)
 {
-    // only accept if there was a gpio irq first
-    if (gpio_irq_producer == gpio_irq_consumer) {
-        return -1;
-    }
-    gpio_irq_consumer = gpio_irq_producer;
-
     xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
     gfx_trigger_ready_set(false);
     xSemaphoreGive(lvgl_mutex);
 
-    // gpio -> usb stats
-    int32_t us = last_usb_timestamp_us - last_btn_gpio_timestamp;
-    printf("[gpio -> usb] diff: us: %5ld\n", us);
-
-    // drop negative values
-    if (us < 0) {
-        return -1;
-    }
+    printf("[gpio -> usb] diff: us: %5ld%s\n", us, (us < 0) ? "  (GPIO edge AFTER USB report)" : "");
 
     xlat_latency_measurement_add(us, LATENCY_GPIO_TO_USB);
 
     // send a message to the gfx thread, to refresh the plot
     struct gfx_event *evt;
     evt = osPoolAlloc(gfxevt_pool); // Allocate memory for the message
+    if (evt == NULL) {
+        return;
+    }
     evt->type = GFX_EVENT_MEASUREMENT;
     evt->value = us;
     osMessagePut(msgQGfxTask, (uint32_t)evt, 0U);
+}
 
-    return 0;
+// Called from the xlat task when a USB report of interest (click/key/motion) was received.
+// Pairs it with a GPIO edge that came before it (positive latency), or, if none did,
+// remembers it so a GPIO edge that follows can be paired with it (negative latency).
+// Events further apart than the GPIO holdoff window are never paired.
+static int calculate_gpio_to_usb_time(uint32_t usb_timestamp)
+{
+    const uint32_t window_us = xlat_gpio_irq_holdoff_us_get();
+    bool have_gpio = false;
+    bool stale_usb = false;
+    uint32_t gpio_timestamp = 0;
+    uint32_t stale_usb_timestamp = 0;
+
+    last_usb_timestamp_us = usb_timestamp;
+
+    // Critical section: the EXTI ISR reads usb_event_pending and bumps gpio_irq_producer
+    taskENTER_CRITICAL();
+    if (gpio_irq_producer != gpio_irq_consumer) {
+        gpio_irq_consumer = gpio_irq_producer;
+        gpio_timestamp = last_btn_gpio_timestamp;
+        have_gpio = (usb_timestamp - gpio_timestamp) < window_us; // GPIO edge before USB, within window
+    }
+    if (!have_gpio) {
+        // no usable GPIO edge yet: wait for one to follow this USB report
+        stale_usb = usb_event_pending;
+        stale_usb_timestamp = usb_event_pending_timestamp;
+        usb_event_pending_timestamp = usb_timestamp;
+        usb_event_pending = true;
+    }
+    taskEXIT_CRITICAL();
+
+    if (have_gpio) {
+        gpio_to_usb_measurement_report((int32_t)(usb_timestamp - gpio_timestamp));
+        return 0;
+    }
+    if (gpio_timestamp != 0) {
+        printf("[gpio -> usb] stale GPIO edge @ %lu ignored (%ld us before USB report @ %lu)\n",
+               gpio_timestamp, (int32_t)(usb_timestamp - gpio_timestamp), usb_timestamp);
+    }
+    if (stale_usb) {
+        printf("[gpio -> usb] USB report @ %lu never got a GPIO edge, dropped\n", stale_usb_timestamp);
+    }
+    return -1;
+}
+
+// Called from the xlat task for a GPIO edge that arrived after the USB report it belongs to
+static void handle_late_gpio_event(const struct hid_event *hevt)
+{
+    gpio_to_usb_measurement_report((int32_t)(hevt->timestamp - hevt->gpio_timestamp));
 }
 
 
@@ -265,6 +311,10 @@ void xlat_process_usb_hid_event(void)
     struct hid_event *hevt = evt.value.p;
 
     switch (hevt->itf_protocol) {
+        case XLAT_EVENT_GPIO_LATE:
+            handle_late_gpio_event(hevt);
+            break;
+
         case HID_ITF_PROTOCOL_MOUSE: {
             uint8_t* hid_raw_data = hevt->report;
 
@@ -288,8 +338,7 @@ void xlat_process_usb_hid_event(void)
                 // This information is available in the button_mask
                 for (uint8_t i = (xlat_report_id_get() ? 1 : 0); i < hevt->report_size; i++) {
                     if (((hid_raw_data[i] ^ prev_report[i]) & hid_raw_data[i] & xlat_button_mask_get()[i])) {
-                        last_usb_timestamp_us = hevt->timestamp;
-                        calculate_gpio_to_usb_time();
+                        calculate_gpio_to_usb_time(hevt->timestamp);
                         printf("[%5lu] hid click @ %lu - byte %d\n", xTaskGetTickCount(), hevt->timestamp, i);
                         break;
                     }
@@ -301,8 +350,7 @@ void xlat_process_usb_hid_event(void)
                 // This information is available in the motion_mask
                 for (uint8_t i = (xlat_report_id_get() ? 1 : 0); i < hevt->report_size; i++) {
                     if (hid_raw_data[i] & xlat_motion_mask_get()[i]) {
-                        last_usb_timestamp_us = hevt->timestamp;
-                        calculate_gpio_to_usb_time();
+                        calculate_gpio_to_usb_time(hevt->timestamp);
                         printf("[%5lu] hid motion @ %lu\n", xTaskGetTickCount(), hevt->timestamp);
                         break;
                     }
@@ -321,10 +369,8 @@ void xlat_process_usb_hid_event(void)
 
             // check the modifier bits:
             if (kbd_report->modifier) {
-                // Save the captured USB event timestamp
-                last_usb_timestamp_us = hevt->timestamp;
                 // calculate the time between the last key press and this key press:
-                calculate_gpio_to_usb_time();
+                calculate_gpio_to_usb_time(hevt->timestamp);
                 printf("USB HID event: modifier 0x%02X\n", kbd_report->modifier);
                 break;
             }
@@ -333,10 +379,8 @@ void xlat_process_usb_hid_event(void)
             for (uint8_t i = 0; i < 6; i++) {
                 if (kbd_report->keycode[i]) {
                     if (kbd_report->keycode[i] > 1) {
-                        // Save the captured USB event timestamp
-                        last_usb_timestamp_us = hevt->timestamp;
                         // calculate the time between the last key press and this key press:
-                        calculate_gpio_to_usb_time();
+                        calculate_gpio_to_usb_time(hevt->timestamp);
                         printf("USB HID event: key press 0x%02X\n", kbd_report->keycode[i]);
                     }
                 }
@@ -365,8 +409,28 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
         return;
     }
     last_btn_gpio_timestamp = cnt;
+
+    if (usb_event_pending) {
+        // A USB report already arrived without a GPIO edge. If it is recent, this edge belongs
+        // to it: negative latency. Hand it to the xlat task (measurement needs the LVGL mutex).
+        usb_event_pending = false;
+        uint32_t usb_timestamp = usb_event_pending_timestamp;
+        if (cnt - usb_timestamp < xlat_gpio_irq_holdoff_us_get()) {
+            struct hid_event *evt = osPoolAlloc(hidevt_pool); // ISR-safe
+            if (evt != NULL) {
+                evt->itf_protocol = XLAT_EVENT_GPIO_LATE;
+                evt->timestamp = usb_timestamp;
+                evt->gpio_timestamp = cnt;
+                evt->report_size = 0;
+                osMessagePut(msgQUsbHidEvent, (uint32_t)evt, 0U); // ISR-safe
+            }
+            goto holdoff;
+        }
+        // pending USB report too old: forget it, treat this as a fresh GPIO edge
+    }
     gpio_irq_producer++;
 
+holdoff:
     // disable the interrupt and re-enable later in a timer
     hw_exti_interrupts_disable();
     xTimerChangePeriodFromISR(xlat_timer_handle, pdMS_TO_TICKS(xlat_gpio_irq_holdoff_us_get() / 1000), NULL);
@@ -401,7 +465,7 @@ void xlat_usb_event_callback(uint32_t timestamp, uint8_t const *report, size_t r
 }
 
 
-uint32_t xlat_last_latency_us_get(enum latency_type type)
+int32_t xlat_last_latency_us_get(enum latency_type type)
 {
     if (type >= LATENCY_TYPE_MAX) {
         return 0;
@@ -414,22 +478,23 @@ uint32_t xlat_last_button_timestamp_us_get(void)
     return last_btn_gpio_timestamp;
 }
 
-uint32_t xlat_latency_average_get(enum latency_type type)
+int32_t xlat_latency_average_get(enum latency_type type)
 {
-    if (type >= LATENCY_TYPE_MAX) {
+    if (type >= LATENCY_TYPE_MAX || average_latency_us_count[type] == 0) {
         return 0;
     }
-    return (uint32_t)(average_latency_us_sum[type] / average_latency_us_count[type]);
+    return (int32_t)(average_latency_us_sum[type] / (int64_t)average_latency_us_count[type]);
 }
 
 uint32_t xlat_latency_variance_get(enum latency_type type)
 {
-    if (type >= LATENCY_TYPE_MAX) {
+    if (type >= LATENCY_TYPE_MAX || average_latency_us_count[type] == 0) {
         return 0;
     }
-    uint64_t avg = average_latency_us_sum[type] / average_latency_us_count[type];
-    uint64_t avg_sq = average_latency_us_sum_sq[type] / average_latency_us_count[type];
-    return (uint32_t)(avg_sq - avg * avg);
+    int64_t avg = average_latency_us_sum[type] / (int64_t)average_latency_us_count[type];
+    int64_t avg_sq = (int64_t)(average_latency_us_sum_sq[type] / average_latency_us_count[type]);
+    int64_t var = avg_sq - avg * avg;
+    return (var > 0) ? (uint32_t)var : 0;
 }
 
 uint32_t xlat_latency_standard_deviation_get(enum latency_type type)
@@ -450,14 +515,14 @@ uint32_t xlat_latency_count_get(enum latency_type type)
     return average_latency_us_count[type];
 }
 
-void xlat_latency_measurement_add(uint32_t latency_us, enum latency_type type)
+void xlat_latency_measurement_add(int32_t latency_us, enum latency_type type)
 {
     if (type >= LATENCY_TYPE_MAX) {
         return;
     }
     last_latency_us[type] = latency_us;
     average_latency_us_sum[type] += latency_us;
-    average_latency_us_sum_sq[type] += latency_us * latency_us;
+    average_latency_us_sum_sq[type] += (uint64_t)((int64_t)latency_us * latency_us);
     average_latency_us_count[type]++;
 
 //    printf(">>> GPIO->USB latency: %5lu us, ", last_gpio_to_usb_latency_us);
@@ -466,6 +531,10 @@ void xlat_latency_measurement_add(uint32_t latency_us, enum latency_type type)
 
 void xlat_latency_reset(void)
 {
+    taskENTER_CRITICAL();
+    usb_event_pending = false;
+    gpio_irq_consumer = gpio_irq_producer;
+    taskEXIT_CRITICAL();
     for (int i = 0; i < LATENCY_TYPE_MAX; i++) {
         last_latency_us[i] = 0;
         average_latency_us_sum[i] = 0;
@@ -507,7 +576,7 @@ void xlat_print_measurement(void)
 {
     // print the new measurement to the console in csv format
     char buf[50];
-    snprintf(buf, sizeof(buf), "%lu;%lu;%lu;%lu\n",
+    snprintf(buf, sizeof(buf), "%lu;%ld;%ld;%lu\n",
              xlat_latency_count_get(LATENCY_GPIO_TO_USB),
              xlat_last_latency_us_get(LATENCY_GPIO_TO_USB),
              xlat_latency_average_get(LATENCY_GPIO_TO_USB),
