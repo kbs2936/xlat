@@ -310,6 +310,7 @@ void xlat_process_usb_hid_event(void)
             }
             // Save the report for the next iteration
             memcpy(prev_report, hid_raw_data, sizeof(prev_report));
+            break;
         }
 
         case HID_ITF_PROTOCOL_KEYBOARD:
