@@ -70,6 +70,8 @@ void xlat_print_measurement(void);
 
 void xlat_gpio_irq_holdoff_us_set(uint32_t us);
 uint32_t xlat_gpio_irq_holdoff_us_get(void);
+void xlat_release_holdoff_us_set(uint32_t us);
+uint32_t xlat_release_holdoff_us_get(void);
 
 uint32_t xlat_counter_1mhz_get(void);
 

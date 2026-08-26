@@ -33,6 +33,7 @@ lv_obj_t *prev_screen = NULL;
 lv_obj_t *edge_dropdown;
 lv_obj_t *bias_dropdown;
 lv_obj_t *debounce_dropdown;
+lv_obj_t *release_holdoff_dropdown;
 lv_obj_t *trigger_dropdown;
 lv_obj_t *mode_dropdown;
 lv_obj_t *trigger_output_dropdown;
@@ -82,6 +83,10 @@ static void event_handler(lv_event_t* e)
                 default: break;
             }
             xlat_gpio_irq_holdoff_us_set(val * 1000);
+        } else if (obj == release_holdoff_dropdown) {
+            static const uint32_t vals[] = {0, 20, 50, 100, 200};
+            uint16_t sel = lv_dropdown_get_selected(obj);
+            if (sel < 5) xlat_release_holdoff_us_set(vals[sel] * 1000);
         } else if (obj == trigger_dropdown) {
             uint16_t sel = lv_dropdown_get_selected(obj);
             xlat_auto_trigger_level_set(sel);
@@ -188,6 +193,17 @@ void gfx_settings_create_page(lv_obj_t *previous_screen)
     lv_obj_align_to(bias_dropdown, bias_label, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
     lv_obj_add_event_cb(bias_dropdown, event_handler, LV_EVENT_VALUE_CHANGED, NULL);
 
+    lv_obj_t *release_holdoff_label = lv_label_create(tab_detection);
+    lv_label_set_text(release_holdoff_label, "Release Holdoff:");
+    lv_obj_set_width(release_holdoff_label, LABEL_WIDTH);
+    lv_obj_align_to(release_holdoff_label, bias_label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 30);
+
+    release_holdoff_dropdown = lv_dropdown_create(tab_detection);
+    lv_dropdown_set_options(release_holdoff_dropdown, "Off\n20ms\n50ms\n100ms\n200ms");
+    lv_obj_set_width(release_holdoff_dropdown, DROPDOWN_WIDTH);
+    lv_obj_align_to(release_holdoff_dropdown, release_holdoff_label, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
+    lv_obj_add_event_cb(release_holdoff_dropdown, event_handler, LV_EVENT_VALUE_CHANGED, NULL);
+
     // Trigger Tab Content
     // Add explanatory text for Trigger tab first
     lv_obj_t *trigger_info = lv_label_create(tab_trigger);
@@ -265,6 +281,18 @@ void gfx_settings_create_page(lv_obj_t *previous_screen)
         default: break;
     }
     lv_dropdown_set_selected(debounce_dropdown, debounce_index);
+
+    // Set release holdoff
+    uint16_t release_index = 2;
+    switch (xlat_release_holdoff_us_get() / 1000) {
+        case 0: release_index = 0; break;
+        case 20: release_index = 1; break;
+        case 50: release_index = 2; break;
+        case 100: release_index = 3; break;
+        case 200: release_index = 4; break;
+        default: break;
+    }
+    lv_dropdown_set_selected(release_holdoff_dropdown, release_index);
 
     // Set input bias
     uint32_t current_bias = hw_config_input_bias_get();

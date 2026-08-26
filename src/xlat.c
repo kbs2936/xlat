@@ -54,6 +54,9 @@ static volatile uint_fast8_t gpio_irq_consumer = 0;
 // The GPIO edge may still follow (e.g. analog/TMR switches where XLAT's input
 // threshold is crossed after the mouse already reported the click): that is a
 // negative latency. Written by the xlat task, consumed by the EXTI ISR.
+// USB-side button state, used to reject GPIO chatter while the button is held or right after release
+static volatile bool     usb_button_held = false;
+static volatile uint32_t usb_release_timestamp = 0;
 static volatile bool     usb_event_pending = false;
 static volatile uint32_t usb_event_pending_timestamp = 0;
 
@@ -334,6 +337,16 @@ void xlat_process_usb_hid_event(void)
 
             // FOR BUTTONS/CLICKS:
             if (xlat_mode_get() == XLAT_MODE_MOUSE_CLICK) {
+                // Track USB button state for GPIO chatter rejection (see HAL_GPIO_EXTI_Callback)
+                for (uint8_t i = (xlat_report_id_get() ? 1 : 0); i < hevt->report_size; i++) {
+                    uint8_t changed = (hid_raw_data[i] ^ prev_report[i]) & xlat_button_mask_get()[i];
+                    if (changed & hid_raw_data[i]) {
+                        usb_button_held = true;
+                    } else if (changed) {
+                        usb_release_timestamp = hevt->timestamp;
+                        usb_button_held = false;
+                    }
+                }
                 // The correct location of button data is determined by parsing the HID descriptor
                 // This information is available in the button_mask
                 for (uint8_t i = (xlat_report_id_get() ? 1 : 0); i < hevt->report_size; i++) {
@@ -406,6 +419,31 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     uint32_t cnt = xlat_counter_1mhz_get();
     // debounce X ms
     if (cnt - last_btn_gpio_timestamp < xlat_gpio_irq_holdoff_us_get()) {
+        return;
+    }
+    // Reject contact chatter that cannot be a new press: edges while USB already reports the button
+    // held (and nothing is waiting to be paired), or within the release holdoff after a USB release.
+    // Only GPIO edges are filtered here; USB press reports are never dropped by this.
+    uint8_t ignore_reason = 0;
+    if (!usb_event_pending) {
+        if (usb_button_held) {
+            ignore_reason = 1;
+        } else if (cnt - usb_release_timestamp < xlat_release_holdoff_us_get()) {
+            ignore_reason = 2;
+        }
+    }
+    if (ignore_reason) {
+        // Chatter: mute the input briefly instead of taking an ISR storm. Re-arm when the release
+        // holdoff ends (reason 2) or after a short pause while the button is held (reason 1).
+        uint32_t mute_us = 5000;
+        if (ignore_reason == 2) {
+            mute_us = xlat_release_holdoff_us_get() - (cnt - usb_release_timestamp);
+        }
+        uint32_t mute_ms = (mute_us + 999) / 1000;
+        if (mute_ms == 0) mute_ms = 1;
+        hw_exti_interrupts_disable();
+        xTimerChangePeriodFromISR(xlat_timer_handle, pdMS_TO_TICKS(mute_ms), NULL);
+        xTimerStartFromISR(xlat_timer_handle, NULL);
         return;
     }
     last_btn_gpio_timestamp = cnt;
@@ -533,6 +571,7 @@ void xlat_latency_reset(void)
 {
     taskENTER_CRITICAL();
     usb_event_pending = false;
+    usb_button_held = false;
     gpio_irq_consumer = gpio_irq_producer;
     taskEXIT_CRITICAL();
     for (int i = 0; i < LATENCY_TYPE_MAX; i++) {
