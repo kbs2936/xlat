@@ -44,7 +44,7 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART6_UART_Init(void);
 
 static bool rising_edge = false;
-static input_bias_t input_bias = INPUT_BIAS_NOPULL;
+static input_bias_t input_bias = INPUT_BIAS_PULLUP;
 
 /**
   * @brief  The application entry point.
@@ -97,6 +97,10 @@ void hw_exti_interrupts_enable(void)
 {
     /* EXTI interrupt init */
     HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+    /* Drop any edge latched while the IRQ was disabled (holdoff), otherwise the ISR
+     * fires immediately on enable with a bogus timestamp. */
+    __HAL_GPIO_EXTI_CLEAR_IT(ARDUINO_D12_Pin);
+    HAL_NVIC_ClearPendingIRQ(EXTI15_10_IRQn);
     HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
 

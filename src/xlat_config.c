@@ -44,6 +44,7 @@ bool keyboard_usage_page_found = false;
 // Therefore, take a large enough time window to debounce the GPIO interrupt.
 #define GPIO_IRQ_HOLDOFF_US (100 * 1000)  // 100ms;
 static uint32_t gpio_irq_holdoff_us = GPIO_IRQ_HOLDOFF_US;
+static uint32_t release_holdoff_us = 50000; // ignore GPIO edges this long after a USB button release
 
 // Mode configuration
 void xlat_mode_set(enum xlat_mode mode)
@@ -101,6 +102,16 @@ uint8_t xlat_auto_trigger_output_get(void)
 void xlat_gpio_irq_holdoff_us_set(uint32_t us)
 {
     gpio_irq_holdoff_us = us;
+}
+
+void xlat_release_holdoff_us_set(uint32_t us)
+{
+    release_holdoff_us = us;
+}
+
+uint32_t xlat_release_holdoff_us_get(void)
+{
+    return release_holdoff_us;
 }
 
 
