@@ -162,6 +162,11 @@ void usb_host_task(void const *param) {
     osDelay(1);
   }
 
+  // Match desktop OS hosts: leave HID devices in report protocol (their power-on default per
+  // HID spec 7.2.6) instead of TinyUSB's default of switching boot-capable interfaces to boot
+  // protocol. Report mode is what mice are designed and optimized for.
+  tuh_hid_set_default_protocol(HID_PROTOCOL_REPORT);
+
   if (!tusb_init(BOARD_TUH_RHPORT, &host_init)) {
     printf("Failed to init USB Host Stack\n");
     vTaskSuspend(NULL);
