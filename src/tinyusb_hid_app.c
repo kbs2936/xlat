@@ -40,7 +40,7 @@ static struct {
 // Note: if report descriptor length > CFG_TUH_ENUMERATION_BUFSIZE, it will be skipped
 // therefore report_desc = NULL, desc_len = 0
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_report, uint16_t desc_len) {
-  printf("HID device address = %d, instance = %d is mounted\n", dev_addr, instance);
+  printf("[%5lu] HID device address = %d, instance = %d is mounted\n", (unsigned long) xTaskGetTickCount(), dev_addr, instance);
 
   // Interface protocol (hid_interface_protocol_enum_t)
   const char *protocol_str[] = {"None", "Keyboard", "Mouse"};
@@ -68,7 +68,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_re
 
 // Invoked when device with hid interface is un-mounted
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
-  printf("HID device address = %d, instance = %d is unmounted\n", dev_addr, instance);
+  printf("[%5lu] HID device address = %d, instance = %d is unmounted\n", (unsigned long) xTaskGetTickCount(), dev_addr, instance);
   if (tuh_connected(0)) {
     // print in red
     printf("\033[31m");

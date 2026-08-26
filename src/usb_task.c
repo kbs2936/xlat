@@ -34,6 +34,10 @@
 #include <xlat.h>
 
 #include "tusb.h"
+
+// XLAT additions to the dwc2 hcd (libs/tinyusb, branch xlat-fixes)
+void hcd_port_status(uint8_t rhport, bool* connected, bool* enabled);
+void hcd_port_power_set(uint8_t rhport, bool on);
 #include "tusb_config.h"
 
 #include "gfx_main.h"
@@ -112,6 +116,35 @@ static void board_init(void) {
 #endif
 }
 
+// Hard reset of the USB host peripheral and ULPI link. Used when the ULPI PHY (USB3320) stops
+// responding: a core soft reset alone does not recover it, an MCU reset does. Mimic that:
+// drive ULPI STP high (wakes the PHY from low-power / resyncs the link), hold the OTG_HS
+// peripheral in RCC reset with its clocks off, then bring everything back up.
+static void usb_phy_hard_reset(void) {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  // ULPI STP (PC0) as GPIO, driven high
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_SET);
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  __HAL_RCC_USB_OTG_HS_FORCE_RESET();
+  __HAL_RCC_USB_OTG_HS_ULPI_CLK_DISABLE();
+  __HAL_RCC_USB_OTG_HS_CLK_DISABLE();
+  osDelay(50);
+  __HAL_RCC_USB_OTG_HS_CLK_ENABLE();
+  __HAL_RCC_USB_OTG_HS_ULPI_CLK_ENABLE();
+  __HAL_RCC_USB_OTG_HS_RELEASE_RESET();
+  osDelay(10);
+
+  // STP back to the ULPI function, re-run the full pin/clock init
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_RESET);
+  board_init();
+}
+
 // USB Host task
 // This top level thread process all usb events and invoke callbacks
 void usb_host_task(void const *param) {
@@ -155,11 +188,55 @@ void usb_host_task(void const *param) {
 #endif
 
   // RTOS forever loop
+  uint32_t port_dead_ms = 0;     // device attached but port disabled
+  uint32_t no_device_ms = 0;     // no device seen after a recovery attempt
+  uint8_t restart_attempts = 0;
   while (1) {
-    // put this thread to waiting state until there is new events
-    tuh_task();
+    // process USB events, wake up periodically for the port watchdog
+    tuh_task_ext(100, false);
 
-    // following code only run if tuh_task() process at least 1 event
+    // USB watchdog. Observed failure with a flaky dongle: the ULPI PHY / core wedges, the port
+    // gets disabled with the device still attached and nothing recovers on its own. Escalate:
+    //  1. soft restart: host stack deinit/reinit (core soft reset, VBUS cycle)
+    //  2. hard restart: RCC peripheral reset + ULPI link reset, then reinit
+    //  3. MCU reset
+    bool connected, enabled;
+    hcd_port_status(BOARD_TUH_RHPORT, &connected, &enabled);
+    bool restart = false;
+    if (connected && !enabled) {
+      port_dead_ms += 100;
+      restart = (port_dead_ms >= 2000);
+    } else if (!connected && restart_attempts > 0) {
+      // device did not come back after a restart: PHY probably still dead
+      no_device_ms += 100;
+      restart = (no_device_ms >= 3000);
+    } else {
+      port_dead_ms = 0;
+      no_device_ms = 0;
+      if (connected && enabled) {
+        restart_attempts = 0; // healthy
+      }
+    }
+
+    if (restart) {
+      port_dead_ms = 0;
+      no_device_ms = 0;
+      restart_attempts++;
+      printf("USB dead (connected=%d enabled=%d), recovery attempt %u\n", connected, enabled, restart_attempts);
+      if (restart_attempts >= 3) {
+        printf("USB recovery failed, resetting XLAT\n");
+        osDelay(100);
+        NVIC_SystemReset();
+      }
+      tuh_deinit(BOARD_TUH_RHPORT);
+      if (restart_attempts >= 2) {
+        usb_phy_hard_reset();
+      }
+      osDelay(500); // VBUS off long enough for the dongle to restart
+      if (!tuh_rhport_init(BOARD_TUH_RHPORT, &host_init)) {
+        printf("USB host re-init failed\n");
+      }
+    }
   }
 }
 
@@ -236,7 +313,7 @@ void tuh_mount_cb(uint8_t daddr) {
     // Get device descriptor first
     tusb_desc_device_t desc_device;
 
-    printf("Device with address %d mounted\n", daddr);
+    printf("[%5lu] Device with address %d mounted\n", (unsigned long) xTaskGetTickCount(), daddr);
 
     if (tuh_descriptor_get_device_sync(daddr, &desc_device, sizeof(desc_device)) == XFER_RESULT_SUCCESS) {
         // Update string descriptors
@@ -255,7 +332,7 @@ void tuh_mount_cb(uint8_t daddr) {
 // XXX FIXME: doesn't seem to be called
 void tuh_umount_cb(uint8_t dev_addr) {
   // application tear-down
-  printf("A device with address %d is unmounted\n", dev_addr);
+  printf("[%5lu] A device with address %d is unmounted\n", (unsigned long) xTaskGetTickCount(), dev_addr);
   xlat_clear_device_info();
 }
 
