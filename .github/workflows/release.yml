@@ -1,0 +1,45 @@
+name: Draft release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        submodules: recursive
+
+    - name: Install arm-none-eabi-gcc toolchain
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-arm-none-eabi
+
+    - name: CMake Generate
+      run: cmake -B build -DCMAKE_TOOLCHAIN_FILE=arm-none-eabi.cmake -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      run: make -C build -j8
+
+    - name: Package firmware
+      run: |
+        cd build
+        zip -j "xlat_firmware_${GITHUB_REF_NAME}.zip" xlat.elf
+
+    - name: Create draft release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release create "$GITHUB_REF_NAME" \
+          --draft \
+          --title "$GITHUB_REF_NAME" \
+          --generate-notes \
+          "build/xlat_firmware_${GITHUB_REF_NAME}.zip"
