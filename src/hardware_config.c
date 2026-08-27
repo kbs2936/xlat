@@ -44,7 +44,7 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART6_UART_Init(void);
 
 static bool rising_edge = false;
-static input_bias_t input_bias = INPUT_BIAS_PULLUP;
+static input_bias_t input_bias = INPUT_BIAS_NOPULL;
 
 /**
   * @brief  The application entry point.
